@@ -1,116 +1,98 @@
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 
-/*
- * Atividade - Produtor e Consumidor
- *
- * Thread padeiro:
- * - produz um pao a cada 1 segundo
- * - nao deixa a vitrine passar de 10 paes
- *
- * Thread cliente:
- * - compra um pao a cada 1,5 segundo
- * - espera caso nao haja paes disponiveis
- */
+#define LIMITE_ESTOQUE      10
+#define PILHA_PRODUTOR      512
+#define PILHA_CONSUMIDOR    512
+#define PRIORIDADE_THREADS  5
 
-#define CAPACIDADE_VITRINE 10
+static volatile int quantidade_paes = 0;
 
-volatile int saldo_vitrine = 0;
+K_MUTEX_DEFINE(controle_estoque);
+K_SEM_DEFINE(sem_paes, 0, LIMITE_ESTOQUE);
 
-/* Mutex para proteger o acesso ao saldo da vitrine */
-K_MUTEX_DEFINE(mutex_saldo);
-
-/*
- * Semaforo contador.
- * Representa quantos paes estao disponiveis para compra.
- *
- * Valor inicial: 0
- * Valor maximo: 10
- */
-K_SEM_DEFINE(paes_disponiveis, 0, CAPACIDADE_VITRINE);
-
-/* -------- THREAD A: padeiro -------- */
-void thread_padeiro(void *p1, void *p2, void *p3)
+static void produtor(void *a, void *b, void *c)
 {
-    ARG_UNUSED(p1);
-    ARG_UNUSED(p2);
-    ARG_UNUSED(p3);
+    ARG_UNUSED(a);
+    ARG_UNUSED(b);
+    ARG_UNUSED(c);
 
-    printk("Padeiro trabalhando\n");
+    printk("Produtor iniciado\n");
 
     while (1) {
         k_msleep(1000);
 
-        k_mutex_lock(&mutex_saldo, K_FOREVER);
+        k_mutex_lock(&controle_estoque, K_FOREVER);
 
-        if (saldo_vitrine < CAPACIDADE_VITRINE) {
-            saldo_vitrine++;
+        if (quantidade_paes < LIMITE_ESTOQUE) {
+            quantidade_paes++;
 
-            printk("Padeiro produziu um pao\n");
-            printk("Saldo vitrine: %d\n", saldo_vitrine);
+            printk("Pao produzido\n");
+            printk("Quantidade atual: %d\n", quantidade_paes);
 
-            /*
-             * Libera um pao para o cliente.
-             * Ou seja, incrementa o semaforo contador.
-             */
-            k_sem_give(&paes_disponiveis);
+            k_sem_give(&sem_paes);
         } else {
-            printk("Vitrine cheia\n");
+            printk("Estoque cheio\n");
         }
 
-        k_mutex_unlock(&mutex_saldo);
+        k_mutex_unlock(&controle_estoque);
     }
 }
 
-/* -------- THREAD B: cliente -------- */
-void thread_cliente(void *p1, void *p2, void *p3)
+static void consumidor(void *a, void *b, void *c)
 {
-    ARG_UNUSED(p1);
-    ARG_UNUSED(p2);
-    ARG_UNUSED(p3);
+    ARG_UNUSED(a);
+    ARG_UNUSED(b);
+    ARG_UNUSED(c);
 
-    printk("Cliente aguardando paes\n");
+    printk("Consumidor iniciado\n");
 
     while (1) {
         k_msleep(1500);
 
-        /*
-         * Espera ate existir pelo menos um pao disponivel.
-         * Se o semaforo estiver em zero, a thread bloqueia aqui.
-         */
-        k_sem_take(&paes_disponiveis, K_FOREVER);
+        k_sem_take(&sem_paes, K_FOREVER);
 
-        k_mutex_lock(&mutex_saldo, K_FOREVER);
+        k_mutex_lock(&controle_estoque, K_FOREVER);
 
-        saldo_vitrine--;
+        if (quantidade_paes > 0) {
+            quantidade_paes--;
 
-        printk("Cliente comprou um pao\n");
-        printk("Saldo vitrine: %d\n", saldo_vitrine);
+            printk("Pao consumido\n");
+            printk("Quantidade atual: %d\n", quantidade_paes);
+        }
 
-        k_mutex_unlock(&mutex_saldo);
+        k_mutex_unlock(&controle_estoque);
     }
 }
 
-/* Definicao das threads */
-K_THREAD_DEFINE(threadPadeiro, 512, thread_padeiro,
+K_THREAD_DEFINE(id_produtor,
+                PILHA_PRODUTOR,
+                produtor,
                 NULL, NULL, NULL,
-                5, 0, 0);
+                PRIORIDADE_THREADS,
+                0,
+                0);
 
-K_THREAD_DEFINE(threadCliente, 512, thread_cliente,
+K_THREAD_DEFINE(id_consumidor,
+                PILHA_CONSUMIDOR,
+                consumidor,
                 NULL, NULL, NULL,
-                5, 0, 0);
+                PRIORIDADE_THREADS,
+                0,
+                0);
 
-/* -------- Funcao main -------- */
 int main(void)
 {
-    while (1) {
-        k_mutex_lock(&mutex_saldo, K_FOREVER);
+    printk("Sistema produtor-consumidor iniciado\n");
 
-        if (saldo_vitrine == 0) {
-            printk("Sem paes no estoque\n");
+    while (1) {
+        k_mutex_lock(&controle_estoque, K_FOREVER);
+
+        if (quantidade_paes == 0) {
+            printk("Estoque vazio\n");
         }
 
-        k_mutex_unlock(&mutex_saldo);
+        k_mutex_unlock(&controle_estoque);
 
         k_msleep(500);
     }
